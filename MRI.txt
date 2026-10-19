@@ -1,100 +1,90 @@
 
-
-import pandas as pd 
-import numpy as np 
-import matplotlib.pyplot as plt 
-import os 
-import tensorflow as tf
+import os
 import kagglehub
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import tensorflow as tf
 
-# Download latest version
+# Download dataset
 path = kagglehub.dataset_download("masoudnickparvar/brain-tumor-mri-dataset")
-
 print("Path to dataset files:", path)
-files = os.listdir(path)
-print(files)
 
-
-train_dir = os.path.join(path , 'Training')
-test_dir  = os.path.join(path , 'Testing')
+train_dir = os.path.join(path, "Training")
+test_dir = os.path.join(path, "Testing")
 
 if not os.path.isdir(train_dir):
-    raise FileNotFoundError(f"Training folder not found:{train_dir}")
-
-
+  raise FileNotFoundError(f"Training folder not found:{train_dir}")
 if not os.path.isdir(test_dir):
-    raise FileNotFoundError(f"Testing folder not found: {test_dir}")
+  raise FileNotFoundError(f"Testing folder not found: {test_dir}")
 
-import tensorflow as tf 
-img_size = (128  , 128)
-batch_size = 64
+img_size = (128, 128)
+batch_size = 32
 
-train_data = tf.keras.utils.image_dataset_from_directory(
-    train_dir ,
-    image_size = img_size,
-    batch_size = batch_size,
-    label_mode = 'categorical'
+# Load raw datasets
+train_data_raw = tf.keras.utils.image_dataset_from_directory(
+    train_dir, image_size=img_size, batch_size=batch_size, label_mode="categorical"
 )
 
-test_data = tf.keras.utils.image_dataset_from_directory(
-    test_dir,
-    image_size = img_size,
-    batch_size = batch_size,
-    label_mode = 'categorical'
+test_data_raw = tf.keras.utils.image_dataset_from_directory(
+    test_dir, image_size=img_size, batch_size=batch_size, label_mode="categorical"
 )
 
-
-class_names = train_data.class_names 
-
+class_names = train_data_raw.class_names
 print("Classes:", class_names)
 print("Number of Class:", len(class_names))
 
-# the cnn model
+# Optimize with cache and prefetch
+AUTOTUNE = tf.data.AUTOTUNE
+train_data = train_data_raw.cache().prefetch(buffer_size=AUTOTUNE)
+test_data = test_data_raw.cache().prefetch(buffer_size=AUTOTUNE)
+
+# --- TRANSFER LEARNING MODEL (MobileNetV2) ---
+base_model = tf.keras.applications.MobileNetV2(
+    input_shape=(128, 128, 3), include_top=False, weights="imagenet"
+)
+base_model.trainable = False  # Freeze pre-trained layers
 
 model = tf.keras.Sequential([
-    tf.keras.layers.Input(shape = (128 , 128 , 3)),
-    tf.keras.layers.Rescaling(1.0/ 255),
-
-    tf.keras.layers.Conv2D(8 , (3 , 3), activation = 'relu'),
-    tf.keras.layers.MaxPooling2D(),
-
-    tf.keras.layers.Conv2D(16 , (3 , 3), activation = 'relu'),
-    tf.keras.layers.MaxPooling2D(),
-
-    tf.keras.layers.Conv2D(32 , (3 , 3), activation = 'relu'),
-    tf.keras.layers.MaxPooling2D(),
-
-    tf.keras.layers.Flatten(),
-    tf.keras.layers.Dense(32 , activation ='relu'),
-    tf.keras.layers.Dropout(0.5),
-    tf.keras.layers.Dense(len(class_names), activation = 'softmax')
+    tf.keras.layers.Input(shape=(128, 128, 3)),
+    # MobileNetV2 expects pixel values scaled between [-1, 1] or [0, 1]
+    tf.keras.layers.Rescaling(1.0 / 127.5, offset=-1.0),
+    # Data Augmentation inside model
+    tf.keras.layers.RandomFlip("horizontal"),
+    tf.keras.layers.RandomRotation(0.1),
+    # Base model
+    base_model,
+    # Custom Classification Head
+    tf.keras.layers.GlobalAveragePooling2D(),
+    tf.keras.layers.Dense(128, activation="relu"),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.Dense(len(class_names), activation="softmax"),
 ])
 
-# compile the model
-
+# Compile model with a slightly lower learning rate
 model.compile(
-    optimizer = 'adam',
-    loss = 'categorical_crossentropy',
-    metrics = ['accuracy']
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+    loss="categorical_crossentropy",
+    metrics=["accuracy"],
 )
 
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
-from keras.callbacks import EarlyStopping
-
-# Change 'adam' to a valid metric like 'val_loss'
 early_stopping = EarlyStopping(
-    monitor='val_loss',  # <--- Fix this line
-    patience=5,
-    restore_best_weights=True,
+    monitor="val_loss", patience=5, restore_best_weights=True, verbose=1
 )
 
+reduce_lr = ReduceLROnPlateau(
+    monitor="val_loss", factor=0.5, patience=2, min_lr=1e-7, verbose=1
+)
 
+# Train the model
 history = model.fit(
     train_data,
-    epochs=20,
+    epochs=15,
     validation_data=test_data,
     verbose=1,
-    callbacks = [early_stopping]
+    callbacks=[early_stopping, reduce_lr],
 )
 
 loss, accuracy = model.evaluate(test_data, verbose=1)
@@ -105,6 +95,8 @@ print("Test accuracy:", accuracy)
 model.save("brain_tumor_cnn.keras")
 
 with open("class_names.txt", "w") as f:
-    f.write("\n".join(class_names))
+  f.write("\n".join(class_names))
 
 print("Model and class names saved successfully.")
+
+
