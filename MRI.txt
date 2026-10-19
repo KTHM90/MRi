@@ -1,0 +1,110 @@
+
+
+import pandas as pd 
+import numpy as np 
+import matplotlib.pyplot as plt 
+import os 
+import tensorflow as tf
+import kagglehub
+
+# Download latest version
+path = kagglehub.dataset_download("masoudnickparvar/brain-tumor-mri-dataset")
+
+print("Path to dataset files:", path)
+files = os.listdir(path)
+print(files)
+
+
+train_dir = os.path.join(path , 'Training')
+test_dir  = os.path.join(path , 'Testing')
+
+if not os.path.isdir(train_dir):
+    raise FileNotFoundError(f"Training folder not found:{train_dir}")
+
+
+if not os.path.isdir(test_dir):
+    raise FileNotFoundError(f"Testing folder not found: {test_dir}")
+
+import tensorflow as tf 
+img_size = (128  , 128)
+batch_size = 64
+
+train_data = tf.keras.utils.image_dataset_from_directory(
+    train_dir ,
+    image_size = img_size,
+    batch_size = batch_size,
+    label_mode = 'categorical'
+)
+
+test_data = tf.keras.utils.image_dataset_from_directory(
+    test_dir,
+    image_size = img_size,
+    batch_size = batch_size,
+    label_mode = 'categorical'
+)
+
+
+class_names = train_data.class_names 
+
+print("Classes:", class_names)
+print("Number of Class:", len(class_names))
+
+# the cnn model
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Input(shape = (128 , 128 , 3)),
+    tf.keras.layers.Rescaling(1.0/ 255),
+
+    tf.keras.layers.Conv2D(8 , (3 , 3), activation = 'relu'),
+    tf.keras.layers.MaxPooling2D(),
+
+    tf.keras.layers.Conv2D(16 , (3 , 3), activation = 'relu'),
+    tf.keras.layers.MaxPooling2D(),
+
+    tf.keras.layers.Conv2D(32 , (3 , 3), activation = 'relu'),
+    tf.keras.layers.MaxPooling2D(),
+
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(32 , activation ='relu'),
+    tf.keras.layers.Dropout(0.5),
+    tf.keras.layers.Dense(len(class_names), activation = 'softmax')
+])
+
+# compile the model
+
+model.compile(
+    optimizer = 'adam',
+    loss = 'categorical_crossentropy',
+    metrics = ['accuracy']
+)
+
+
+from keras.callbacks import EarlyStopping
+
+# Change 'adam' to a valid metric like 'val_loss'
+early_stopping = EarlyStopping(
+    monitor='val_loss',  # <--- Fix this line
+    patience=5,
+    restore_best_weights=True,
+)
+
+
+history = model.fit(
+    train_data,
+    epochs=20,
+    validation_data=test_data,
+    verbose=1,
+    callbacks = [early_stopping]
+)
+
+loss, accuracy = model.evaluate(test_data, verbose=1)
+
+print("Test loss:", loss)
+print("Test accuracy:", accuracy)
+
+model.save("brain_tumor_cnn.keras")
+
+with open("class_names.txt", "w") as f:
+    f.write("\n".join(class_names))
+
+print("Model and class names saved successfully.")
